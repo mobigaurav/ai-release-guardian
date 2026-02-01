@@ -49,7 +49,7 @@ jobs:
           cat phase1_tests_generated.json
       
       - name: Upload test definitions
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: test-definitions
           path: phase1_tests_generated.json
@@ -93,7 +93,7 @@ jobs:
       
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: phase2_tests_executed.json
@@ -119,7 +119,7 @@ jobs:
           pip install -r requirements.txt
       
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
       
       - name: Phase 2 - Validate Tests
         id: validate
@@ -144,7 +144,7 @@ jobs:
           cat phase2_tests_validated.json
       
       - name: Upload validation report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: validation-report
           path: phase2_tests_validated.json
@@ -173,7 +173,7 @@ jobs:
           pip install -r requirements.txt
       
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
       
       - name: Phase 2 - Make Deployment Decision
         id: decide
@@ -314,7 +314,7 @@ jobs:
           exit 1
       
       - name: Upload deployment decision
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: deployment-decision
           path: phase2_deployment_decision.json
@@ -327,7 +327,7 @@ jobs:
     if: always()
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
       
       - name: Display Summary
         run: |
