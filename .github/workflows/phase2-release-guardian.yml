@@ -1,0 +1,351 @@
+name: Phase 2 - Release Guardian Auto-QA
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, develop]
+
+jobs:
+  phase1-test-generation:
+    name: Phase 1 - Generate Tests & Score Risk
+    runs-on: ubuntu-latest
+    outputs:
+      tests-generated: ${{ steps.generate.outputs.tests-generated }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Phase 1 - Generate Tests
+        id: generate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          python -m src.agents.phase2_orchestrator generate-tests \
+            --repo-owner "${{ github.repository_owner }}" \
+            --repo-name "${{ github.event.repository.name }}" \
+            --pr-number "${{ github.event.pull_request.number }}" \
+            --output phase1_tests_generated.json
+          
+          # Count generated tests
+          TESTS=$(python -c "import json; print(json.load(open('phase1_tests_generated.json'))['tests']['total'])")
+          echo "tests-generated=$TESTS" >> $GITHUB_OUTPUT
+          
+          cat phase1_tests_generated.json
+      
+      - name: Upload test definitions
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-definitions
+          path: phase1_tests_generated.json
+          retention-days: 30
+
+  phase2-execute-tests:
+    name: Phase 2 - Execute Tests
+    needs: phase1-test-generation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-json-report
+      
+      - name: Phase 2 - Execute Tests
+        id: execute
+        run: |
+          python -m src.agents.phase2_orchestrator execute-tests \
+            --repo-path . \
+            --output phase2_tests_executed.json
+          
+          # Parse results
+          PASSED=$(python -c "import json; r=json.load(open('phase2_tests_executed.json')); print(r['summary']['passed'])")
+          TOTAL=$(python -c "import json; r=json.load(open('phase2_tests_executed.json')); print(r['summary']['total'])")
+          
+          echo "tests-passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "tests-total=$TOTAL" >> $GITHUB_OUTPUT
+          
+          cat phase2_tests_executed.json
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: phase2_tests_executed.json
+          retention-days: 30
+
+  phase2-validate-tests:
+    name: Phase 2 - Validate Tests
+    needs: [phase1-test-generation, phase2-execute-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+      
+      - name: Phase 2 - Validate Tests
+        id: validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          python -m src.agents.phase2_orchestrator validate-tests \
+            --repo-owner "${{ github.repository_owner }}" \
+            --repo-name "${{ github.event.repository.name }}" \
+            --pr-number "${{ github.event.pull_request.number }}" \
+            --test-results test-results/phase2_tests_executed.json \
+            --output phase2_tests_validated.json
+          
+          # Parse validation result
+          COVERAGE=$(python -c "import json; r=json.load(open('phase2_tests_validated.json')); print(r['coverage_percentage'])")
+          STATUS=$(python -c "import json; r=json.load(open('phase2_tests_validated.json')); print(r['status'])")
+          
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+          echo "validation-status=$STATUS" >> $GITHUB_OUTPUT
+          
+          cat phase2_tests_validated.json
+      
+      - name: Upload validation report
+        uses: actions/upload-artifact@v3
+        with:
+          name: validation-report
+          path: phase2_tests_validated.json
+          retention-days: 30
+
+  phase2-deployment-decision:
+    name: Phase 2 - Deployment Decision
+    needs: [phase1-test-generation, phase2-execute-tests, phase2-validate-tests]
+    runs-on: ubuntu-latest
+    outputs:
+      decision-status: ${{ steps.decide.outputs.decision-status }}
+      can-auto-merge: ${{ steps.decide.outputs.can-auto-merge }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+      
+      - name: Phase 2 - Make Deployment Decision
+        id: decide
+        run: |
+          python -m src.agents.phase2_orchestrator make-decision \
+            --test-defs test-definitions/phase1_tests_generated.json \
+            --test-results test-results/phase2_tests_executed.json \
+            --validation validation-report/phase2_tests_validated.json \
+            --output phase2_deployment_decision.json
+          
+          # Parse decision
+          DECISION=$(python -c "import json; r=json.load(open('phase2_deployment_decision.json')); print(r['status'])")
+          CONFIDENCE=$(python -c "import json; r=json.load(open('phase2_deployment_decision.json')); print(r['confidence'])")
+          
+          echo "decision-status=$DECISION" >> $GITHUB_OUTPUT
+          
+          if [ "$DECISION" = "GO" ]; then
+            echo "can-auto-merge=true" >> $GITHUB_OUTPUT
+          else
+            echo "can-auto-merge=false" >> $GITHUB_OUTPUT
+          fi
+          
+          cat phase2_deployment_decision.json
+      
+      - name: Post Decision to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const decision = JSON.parse(fs.readFileSync('phase2_deployment_decision.json', 'utf8'));
+            
+            // Get test definitions for summary
+            let testDefs = {};
+            try {
+              testDefs = JSON.parse(fs.readFileSync('test-definitions/phase1_tests_generated.json', 'utf8'));
+            } catch (e) {
+              console.log('Could not read test definitions');
+            }
+            
+            // Get validation for summary
+            let validation = {};
+            try {
+              validation = JSON.parse(fs.readFileSync('validation-report/phase2_tests_validated.json', 'utf8'));
+            } catch (e) {
+              console.log('Could not read validation report');
+            }
+            
+            const emoji = decision.status === 'GO' ? '✅' : 
+                         decision.status === 'GATE' ? '⚠️' : '❌';
+            
+            let comment = `## ${emoji} Phase 2 - AI Release Guardian Auto-QA\n\n`;
+            comment += `**Decision:** ${decision.status} (Confidence: ${decision.confidence}%)\n\n`;
+            
+            // Add test generation summary
+            if (testDefs.tests) {
+              comment += `### 🧪 Tests Generated\n`;
+              comment += `- Integration: ${testDefs.tests.integration?.length || 0}\n`;
+              comment += `- Automation: ${testDefs.tests.automation?.length || 0}\n`;
+              comment += `- E2E: ${testDefs.tests.e2e?.length || 0}\n`;
+              comment += `- **Total: ${testDefs.tests.total}**\n\n`;
+            }
+            
+            // Add validation summary
+            if (validation.coverage_percentage) {
+              comment += `### ✅ Test Validation\n`;
+              comment += `- AC Coverage: ${validation.coverage_percentage}%\n`;
+              comment += `- Status: ${validation.status}\n\n`;
+            }
+            
+            // Add risk assessment
+            if (testDefs.risk_assessment) {
+              comment += `### 📊 Risk Assessment\n`;
+              comment += `- Risk Score: ${testDefs.risk_assessment.risk_score}/100\n`;
+              comment += `- Risk Flags: ${testDefs.risk_assessment.risk_flags.length > 0 ? testDefs.risk_assessment.risk_flags.join(', ') : 'None'}\n\n`;
+            }
+            
+            // Add reasoning
+            if (decision.reasoning.length > 0) {
+              comment += `### 💡 Reasoning\n`;
+              decision.reasoning.forEach(r => {
+                comment += `- ${r}\n`;
+              });
+              comment += '\n';
+            }
+            
+            // Add gates if any
+            if (decision.deployment_gates && decision.deployment_gates.length > 0) {
+              comment += `### ⚠️ Required Gates\n`;
+              decision.deployment_gates.forEach(gate => {
+                comment += `- ${gate}\n`;
+              });
+              comment += '\n';
+            }
+            
+            // Add recommendation
+            comment += `### 🎯 Recommendation\n${decision.recommendation}\n\n`;
+            
+            // Add next steps
+            if (decision.next_steps && decision.next_steps.length > 0) {
+              comment += `### 📋 Next Steps\n`;
+              decision.next_steps.forEach((step, i) => {
+                comment += `${i + 1}. ${step}\n`;
+              });
+            }
+            
+            comment += `\n---\n*Generated by AI Release Guardian Phase 2*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+      
+      - name: Auto-merge if GO
+        if: steps.decide.outputs.can-auto-merge == 'true' && github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            console.log('✅ AUTO-MERGE: Decision is GO');
+            try {
+              github.rest.pulls.merge({
+                pull_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                merge_method: 'squash'
+              });
+              console.log('✅ PR auto-merged successfully');
+            } catch (error) {
+              console.log('⚠️ Could not auto-merge (may already be merged):', error.message);
+            }
+      
+      - name: Block merge if NO-GO
+        if: steps.decide.outputs.decision-status == 'NO-GO'
+        run: |
+          echo "❌ Deployment blocked: NO-GO decision"
+          exit 1
+      
+      - name: Upload deployment decision
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-decision
+          path: phase2_deployment_decision.json
+          retention-days: 30
+
+  publish-results:
+    name: Publish Results
+    needs: phase2-deployment-decision
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+      
+      - name: Display Summary
+        run: |
+          echo "=== AI Release Guardian Phase 1 + Phase 2 Results ==="
+          echo ""
+          echo "📊 Tests Generated:"
+          if [ -f "test-definitions/phase1_tests_generated.json" ]; then
+            python -c "import json; t=json.load(open('test-definitions/phase1_tests_generated.json')); print(f'  Total: {t[\"tests\"][\"total\"]}')"
+          fi
+          echo ""
+          echo "✅ Tests Executed:"
+          if [ -f "test-results/phase2_tests_executed.json" ]; then
+            python -c "import json; r=json.load(open('test-results/phase2_tests_executed.json')); print(f'  Passed: {r[\"summary\"][\"passed\"]}/{r[\"summary\"][\"total\"]}')"
+          fi
+          echo ""
+          echo "🎯 Deployment Decision:"
+          if [ -f "deployment-decision/phase2_deployment_decision.json" ]; then
+            python -c "import json; d=json.load(open('deployment-decision/phase2_deployment_decision.json')); print(f'  Status: {d[\"status\"]} (Confidence: {d[\"confidence\"]}%)')"
+          fi
+          echo ""
+          echo "✨ Workflow complete!"

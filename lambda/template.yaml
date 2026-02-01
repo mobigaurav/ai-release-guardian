@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 512
+    Runtime: python3.11
+    Environment:
+      Variables:
+        GITHUB_TOKEN: !Ref GitHubToken
+        JIRA_URL: !Ref JiraUrl
+        JIRA_USER: !Ref JiraUser
+        JIRA_API_TOKEN: !Ref JiraApiToken
+        CLAUDE_API_KEY: !Ref ClaudeApiKey
+
+Parameters:
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub Personal Access Token
+  
+  JiraUrl:
+    Type: String
+    Description: Jira URL
+  
+  JiraUser:
+    Type: String
+    Description: Jira User Email
+  
+  JiraApiToken:
+    Type: String
+    NoEcho: true
+    Description: Jira API Token
+  
+  ClaudeApiKey:
+    Type: String
+    NoEcho: true
+    Description: Anthropic Claude API Key
+
+Resources:
+  ReleaseGuardianFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ai-release-guardian
+      CodeUri: .
+      Handler: handler.lambda_handler
+      Events:
+        GitHubWebhook:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReleaseGuardianApi
+            Path: /webhook
+            Method: POST
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ai-release-guardian:*
+
+  ReleaseGuardianApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: ai-release-guardian-api
+      StageName: prod
+      Description: AI Release Guardian API for GitHub PR analysis
+
+Outputs:
+  WebhookUrl:
+    Description: GitHub Webhook URL
+    Value: !Sub https://${ReleaseGuardianApi}.execute-api.${AWS::Region}.amazonaws.com/prod/webhook
+  
+  FunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt ReleaseGuardianFunction.Arn
