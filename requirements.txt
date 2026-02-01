@@ -8,7 +8,7 @@ PyGithub==2.1.1
 jira==3.10.5
 
 # MCP Server
-mcp==0.1.0
+mcp==1.26.0
 typing-extensions==4.12.2
 
 # HTTP & Async
