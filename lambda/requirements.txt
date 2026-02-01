@@ -2,6 +2,6 @@ anthropic==0.42.0
 pydantic==2.8.2
 pydantic-settings==2.4.0
 PyGithub==2.1.1
-jira==3.13.0
+jira==3.10.5
 boto3==1.34.0
 aws-lambda-powertools==2.38.0
